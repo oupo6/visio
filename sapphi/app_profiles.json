@@ -17,5 +17,24 @@
         "last_success_ts": 1781494968.472055
       }
     }
+  },
+  "Gemini": {
+    "app": "Gemini",
+    "mode": "structured",
+    "ax_count": 0,
+    "sample_labels": [],
+    "ts": 1781506549.3753579,
+    "target_stats": {
+      "전송": {
+        "target": "전송",
+        "success": {
+          "snapshot": 2
+        },
+        "failure": {},
+        "last_ts": 1781506549.375378,
+        "last_success_method": "snapshot",
+        "last_success_ts": 1781506549.375378
+      }
+    }
   }
 }

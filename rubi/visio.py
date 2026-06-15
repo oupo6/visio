@@ -154,10 +154,10 @@ def generate_test_plan(feature: str, judge_model: str = DEFAULT_JUDGE,
     cases_raw: list = []
     if not offline:
         try:
-            prior = emeri.recall_text(routines_dir, feature, task_key=spec0.key())
+            weak, verified = emeri.recall_for_design(routines_dir, feature, task_key=spec0.key())
         except Exception:
-            prior = ""
-        cases_raw = _llm_cases(feature, prior, judge_model, n)
+            weak, verified = "", ""
+        cases_raw = _llm_cases(feature, weak, verified, judge_model, n)
     if not cases_raw:
         cases_raw = _fallback_cases(feature, spec0)
 
@@ -196,11 +196,16 @@ def generate_test_plan(feature: str, judge_model: str = DEFAULT_JUDGE,
                     fixture_requests=fixture_requests, sut_entry="")
 
 
-def _llm_cases(feature: str, prior: str, model: str, n: int) -> list:
+def _llm_cases(feature: str, weak: str, verified: str, model: str, n: int) -> list:
+    """기능설명(+과거 학습)으로 엣지 케이스 설계. weak=과거 약점(반드시 포함) / verified=검증됨(중복 최소)."""
     from .provider import _cli_json
-    prior_block = f"\n## 이미 학습한 규칙(중복 케이스 만들지 마라)\n{prior}\n" if prior else ""
-    prompt = (f"{_PLAN_SYS}\n\n## 검증할 기능\n{feature}\n{prior_block}\n"
-              f"최대 {n}개. 가장 잘 *깨질* 케이스 위주로.")
+    blocks = ""
+    if weak:                       # 약점은 *맨 앞*에 강조 — 회귀 확인 위해 반드시 타깃
+        blocks += f"\n## ★반드시 포함할 케이스 — 과거에 깨진 약점(회귀 확인)\n{weak}\n"
+    if verified:
+        blocks += f"\n## 이미 검증된 동작(중복 최소화)\n{verified}\n"
+    prompt = (f"{_PLAN_SYS}\n\n## 검증할 기능\n{feature}\n{blocks}\n"
+              f"최대 {n}개. 가장 잘 *깨질* 케이스 위주로 — 단, 위 '★약점'이 있으면 그건 *반드시* 포함하라.")
     try:
         data = _cli_json(prompt, model)
         cases = data.get("cases") if isinstance(data, dict) else None
@@ -439,6 +444,7 @@ def run_test_plan(plan: TestPlan, mode: str = "rehearse", out_dir: str = "visio_
                 oracle_evidence=[oracle_res], axis_results=[], confidence=conf))
             results.append(CaseResult(case, status, achieved, round(conf, 2), gate,
                                       verdict, {}, shot, judge=judge_label, oracle=oracle_res, trust=trust))
+            _learn_from_case(routines_dir, plan, case, cspec, achieved, status, verdict, conf)
             if verbose:
                 icon = {"pass": "✅", "fail": "❌", "blocked_by_gate": "🛑", "error": "⚠️"}.get(status, "·")
                 print(f"    🎯 {judge_label} 결과 직접읽기 판정(VLM 생략): {icon} {status} (신뢰 {conf:.2f}, 신뢰닻 {trust})")
@@ -531,6 +537,7 @@ def run_test_plan(plan: TestPlan, mode: str = "rehearse", out_dir: str = "visio_
         results.append(CaseResult(case, status, achieved, round(conf, 2), gate,
                                   verdict, pcheck, shot, judge=judge_label,
                                   oracle=oracle_res, trust=trust))
+        _learn_from_case(routines_dir, plan, case, cspec, achieved, status, verdict, conf)
         if verbose:
             icon = {"pass": "✅", "fail": "❌", "blocked_by_gate": "🛑", "error": "⚠️"}.get(status, "·")
             print(f"    {icon} {status} (신뢰 {conf:.2f}, 게이트 {gate}, 판정 {judge_label}, 신뢰닻 {trust})"
@@ -548,6 +555,33 @@ def run_test_plan(plan: TestPlan, mode: str = "rehearse", out_dir: str = "visio_
     rep.regression = _regression_diff(routines_dir, plan, results)
     rep.report_path = _write_report(rep, out_dir)
     return rep
+
+
+def _learn_from_case(routines_dir: str, plan: TestPlan, case: TestCase, cspec,
+                     achieved: bool, status: str, verdict: dict, conf: float) -> int:
+    """판정(pass/fail) 직후 EMERI에 *테스트 교훈*을 적재 — 다음 설계가 recall로 받아
+    '저번에 이 기능 이 부분 약했지→더 본다'를 실현한다(학습 루프의 *write* 쪽 = 그동안 빠졌던 곳).
+
+    결정론(LLM 0회·비용 없음): 케이스 결과를 작업유형(task_key)별 절차기억으로 저장.
+    ★RUBI 오라클이 판정한 *뒤에만*(status가 pass/fail일 때만) — error/blocked는 학습 안 함(기억 오염 방지)."""
+    from . import emeri
+    if status not in ("pass", "fail"):
+        return 0
+    diag = (verdict.get("diagnosis") or "").strip()
+    failed_axis = (next((a.get("axis") for a in (verdict.get("axis_results") or [])
+                         if a.get("verdict") == "fail"), "")
+                   or next((q.get("axis") for q in (verdict.get("quality_axes") or [])
+                            if q.get("verdict") == "fail"), ""))
+    when = f"'{plan.feature}' 류({getattr(cspec, 'task_type', '')}) 기능 테스트 시 — 케이스 «{case.title}»"
+    if achieved:
+        then = "이 시나리오는 통과 — 유효한 검사로 다음 설계에도 포함하라"
+    else:
+        then = f"이 시나리오에서 실패(약점) — 다음 테스트 때 우선 검사하라: {diag or case.rationale or case.expected}"
+    ok = emeri.save_lesson(routines_dir, goal=case.goal, when=when[:200], then=then[:200],
+                           works=achieved, task_key=cspec.key(), axis=failed_axis,
+                           fail_reason=("" if achieved else diag[:180]),
+                           confidence=max(0.0, min(float(conf or 0.0), 1.0)))
+    return 1 if ok else 0
 
 
 def _observe_state(isolate: str | None, out_dir: str, case: TestCase) -> dict:

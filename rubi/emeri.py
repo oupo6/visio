@@ -145,6 +145,27 @@ def recall_text(routines_dir: str, goal: str, max_items: int = 6, task_key: str 
             + "\n".join(lines))
 
 
+def recall_for_design(routines_dir: str, goal: str, max_items: int = 6,
+                      task_key: str = "") -> tuple[str, str]:
+    """테스트 *설계*용 회상 — fails(과거 약점)는 '반드시 재검사', works(검증됨)는 '중복 최소화'로 *분리*.
+
+    ★recall_text 는 워커용 '✗하지마' 프레이밍이라 설계에 그대로 주입하면 약점을 '이미 아는 것=건너뜀'
+      으로 만든다(측정으로 확인: 약점 명시해도 설계가 안 만듦). 설계는 정반대여야 — *과거에 깨진 곳을
+      더 본다*. 그래서 fails 는 '반드시 포함', works 는 '중복 최소화'로 나눠 반환한다.
+    반환: (weak_text, verified_text) — 둘 다 없으면 ('', '')."""
+    items = recall(routines_dir, goal, max_items, task_key=task_key)
+    weak, verified = [], []
+    for e in items:
+        scope = f"[{e.get('axis')}] " if e.get("axis") else ""
+        line = f"- {scope}「{e.get('when','')}」 → {e.get('then','')}"
+        (weak if e.get("kind") == "fails" else verified).append(line)
+    wtxt = ("★과거에 *이 시나리오들에서 깨졌다*(약점). 회귀 확인을 위해 *반드시* 이를 직접 타깃하는 "
+            "테스트 케이스를 포함하라(절대 '이미 안다'고 건너뛰지 마라):\n" + "\n".join(weak)) if weak else ""
+    vtxt = ("아래 동작은 과거에 검증됐다 — *똑같은* 케이스 중복 생성은 피하라(약점/새 엣지에 예산을 써라):\n"
+            + "\n".join(verified)) if verified else ""
+    return wtxt, vtxt
+
+
 def distill_rules(goal: str, trace: str, achieved: bool, diagnosis: str, model: str) -> list[dict]:
     """이번 실행의 '생각+행동' 기록에서 *재사용 가능한 상황→행동 규칙*을 뽑는다(텍스트만, 값쌈).
 
