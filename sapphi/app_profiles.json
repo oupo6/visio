@@ -36,5 +36,24 @@
         "last_success_ts": 1781506549.375378
       }
     }
+  },
+  "Music": {
+    "app": "Music",
+    "mode": "structured",
+    "ax_count": 0,
+    "sample_labels": [],
+    "ts": 1781524801.827308,
+    "target_stats": {
+      "전송": {
+        "target": "전송",
+        "success": {
+          "snapshot": 2
+        },
+        "failure": {},
+        "last_ts": 1781524801.82732,
+        "last_success_method": "snapshot",
+        "last_success_ts": 1781524801.82732
+      }
+    }
   }
 }

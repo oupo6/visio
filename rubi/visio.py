@@ -146,7 +146,9 @@ _PLAN_SYS = (
 
 def generate_test_plan(feature: str, judge_model: str = DEFAULT_JUDGE,
                        build_model: str = DEFAULT_BUILD, n: int = 6,
-                       offline: bool = False, routines_dir: str = "rubi_routines") -> TestPlan:
+                       offline: bool = False, routines_dir: str = "rubi_routines",
+                       artifact: str = "") -> TestPlan:
+    """artifact = (선택) 기능 구현 코드/경로 — 주면 *코드-이해*로 위험표면을 뽑아 설계에 반영(white-box 설계)."""
     from . import taskspec, emeri
 
     feature_key = _slug(feature)
@@ -157,7 +159,8 @@ def generate_test_plan(feature: str, judge_model: str = DEFAULT_JUDGE,
             weak, verified = emeri.recall_for_design(routines_dir, feature, task_key=spec0.key())
         except Exception:
             weak, verified = "", ""
-        cases_raw = _llm_cases(feature, weak, verified, judge_model, n)
+        risk = _risk_surface(feature, artifact, judge_model) if artifact else ""
+        cases_raw = _llm_cases(feature, weak, verified, risk, judge_model, n)
     if not cases_raw:
         cases_raw = _fallback_cases(feature, spec0)
 
@@ -196,16 +199,41 @@ def generate_test_plan(feature: str, judge_model: str = DEFAULT_JUDGE,
                     fixture_requests=fixture_requests, sut_entry="")
 
 
-def _llm_cases(feature: str, weak: str, verified: str, model: str, n: int) -> list:
-    """기능설명(+과거 학습)으로 엣지 케이스 설계. weak=과거 약점(반드시 포함) / verified=검증됨(중복 최소)."""
+def _risk_surface(feature: str, artifact: str, model: str) -> str:
+    """설계 UNDERSTAND 단계 — 기능 *구현(코드/산출물)*을 읽어 *이 기능 고유의 위험표면*을 뽑는다.
+    과거경험(EMERI)과 *독립적인* 비-자명 위험원 = 현재 구조. (측정: 코드-특정 버그를 설명만보다 잘 잡음.)
+    ★설계는 white-box(코드 봐도 됨)지만 *판정(verdict)은 여전히 오라클이 실제 상태로* 함 → 독립성 유지."""
+    from .provider import _cli_json
+    code = artifact or ""
+    try:
+        if code and os.path.exists(os.path.expanduser(code)):
+            code = open(os.path.expanduser(code), encoding="utf-8").read()
+    except OSError:
+        pass
+    if not code.strip():
+        return ""
+    data = _cli_json(
+        f"기능: {feature}\n\n구현:\n```\n{code[:2000]}\n```\n\n"
+        "이 구현의 *고유 위험표면* — 어떤 입력/상태에서 깨질지 *코드 근거로* 짚어라"
+        "(특정 토큰·분기·미처리 입력 등 코드에서만 보이는 것). "
+        'ONLY JSON: {"risks":["<구체 위험: 어떤 입력에서 어떻게 깨지나>"]}', model)
+    risks = (data.get("risks") if isinstance(data, dict) else None) or []
+    return "\n".join(f"- {str(r)}" for r in risks if str(r).strip())
+
+
+def _llm_cases(feature: str, weak: str, verified: str, risk: str, model: str, n: int) -> list:
+    """기능설명(+코드위험+과거학습)으로 엣지 케이스 설계.
+    risk=코드도출 위험(반드시 타깃) / weak=과거 약점(반드시 포함) / verified=검증됨(중복 최소)."""
     from .provider import _cli_json
     blocks = ""
-    if weak:                       # 약점은 *맨 앞*에 강조 — 회귀 확인 위해 반드시 타깃
+    if risk:                       # 코드에서 도출한 위험 — 직접 건드리는 케이스
+        blocks += f"\n## ★코드에서 도출한 위험표면 — 이걸 직접 건드리는 케이스를 포함하라\n{risk}\n"
+    if weak:                       # 약점은 강조 — 회귀 확인 위해 반드시 타깃
         blocks += f"\n## ★반드시 포함할 케이스 — 과거에 깨진 약점(회귀 확인)\n{weak}\n"
     if verified:
         blocks += f"\n## 이미 검증된 동작(중복 최소화)\n{verified}\n"
     prompt = (f"{_PLAN_SYS}\n\n## 검증할 기능\n{feature}\n{blocks}\n"
-              f"최대 {n}개. 가장 잘 *깨질* 케이스 위주로 — 단, 위 '★약점'이 있으면 그건 *반드시* 포함하라.")
+              f"최대 {n}개. 가장 잘 *깨질* 케이스 위주로 — 단, 위 '★' 항목이 있으면 *반드시* 포함하라.")
     try:
         data = _cli_json(prompt, model)
         cases = data.get("cases") if isinstance(data, dict) else None
