@@ -16,7 +16,7 @@ import os
 import subprocess
 import sys
 
-DIGEST_TITLE = "📥 알림 정리"
+DIGEST_TITLE = os.environ.get("VISIO_DIGEST_TITLE", "📥 알림 정리")  # 테스트가 고유명 주입 가능
 
 
 def _read_payload() -> dict:

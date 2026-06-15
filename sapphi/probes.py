@@ -152,15 +152,22 @@ def _notes_contains(params: dict, injected: dict | None) -> dict:
     if not osa:
         return {"ok": False, "achieved": None, "evidence": "", "detail": "osascript 없음"}
     title = params.get("title") or ""
-    if title:
-        sel = f'(notes whose name is "{_osa_escape(title)}")'
-    else:
-        sel = 'notes'
+    sel = f'(notes whose name is "{_osa_escape(title)}")' if title else 'notes'
+    # ★'Recently Deleted'(휴지통) 노트 제외 — 삭제된 노트 내용이 '존재'로 잡히면 거짓PASS.
+    #   (라이브 측정에서 발견: notes whose name 은 전 계정+휴지통을 봐서 삭제된 노트가 ~30일 남음.
+    #    전역 매칭은 유지하고 note 의 container 가 'Recently Deleted'(휴지통)인 것만 제외한다.
+    #    (활성 노트는 폴더 미지정 생성 시 container 이름이 빈 문자열일 수 있어 cn=="" 는 포함 유지.)
     script = (
         'tell application "Notes"\n'
         '  set out to ""\n'
         f'  repeat with n in {sel}\n'
-        '    set out to out & (plaintext of n) & "\\n"\n'
+        '    set cn to ""\n'
+        '    try\n'
+        '      set cn to (name of (container of n))\n'
+        '    end try\n'
+        '    if cn is not "Recently Deleted" and cn is not "최근 삭제된 항목" then\n'
+        '      set out to out & (plaintext of n) & "\\n"\n'
+        '    end if\n'
         '  end repeat\n'
         '  return out\n'
         'end tell\n')
