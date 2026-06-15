@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# VISIO runtime outputs & caches (regenerated; never commit)
+visio_out/
+sapphi_out/
+rubi_out*/
+ego_out/
+*.png
+
+# OS
+.DS_Store

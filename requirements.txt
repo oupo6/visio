@@ -1,0 +1,4 @@
+anthropic>=0.107
+playwright>=1.40
+pyautogui>=0.9.54   # jarvis 데스크톱 제어 (macOS: 화면 기록 + 손쉬운 사용 권한 필요)
+pillow>=10          # 스크린샷 처리 (pyautogui/jarvis --check 에 필요)
